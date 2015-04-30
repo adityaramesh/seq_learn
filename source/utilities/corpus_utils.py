@@ -5,20 +5,29 @@ Takes a dictionary describing a corpora and puts the contents into a single file
 on which a model can be easily trained.
 """
 
-from enum import Enum
-
 import sys
 import os.path
 import h5py
 
+import re
 import math
 import numpy as np
 
-class Granularity(Enum):
-    word = 1,
-    character = 2
+WORD = 0
+CHARACTER = 1
+
+DEFAULT = 0
+SPLIT_ON_SPACES = 1
 
 class LazyGroupManager:
+    """
+    Prior to processing the corpora, it is not possible to tell whether we will
+    have to create the top-level groups `train` and `validate`. Creating these
+    groups initially and removing them later if they are not used is not a good
+    option, because this will result in fragmentation within the file. Instead,
+    we create the groups lazily using this class.
+    """
+
     def __init__(self, output_file):
         self.output_file = output_file
         self.train_group = None
@@ -27,25 +36,58 @@ class LazyGroupManager:
     def get_train_group(self):
         if self.train_group == None:
             self.train_group = self.output_file.create_group("/train")
+        return self.train_group
 
     def get_validate_group(self):
         if self.validate_group == None:
             self.validate_group = self.output_file.create_group("/validate")
+        return self.validate_group
 
-def corpus_iter_words(corpus_file):
+def corpus_iter_words(corpus):
     """
     Iterates over a corpus at the word level.
     """
-    for word in corpus_file.read().split(' '):
-        yield word
 
-def corpus_iter_chars(corpus_file, multichar_tokens):
+    corpus_file = open(corpus["path"], mode='r', encoding=corpus["encoding"])
+
+    if corpus["word_tokenization"] == DEFAULT:
+        """
+        This is the regex that we use to perform the default word tokenization.
+        Use http://regexper.com to visualize it.
+
+        Examples of words that we parse in their entirety:
+        - M&Ms
+        - 123.45-point
+        - magnitude-7.0
+        - they're
+
+        Examples of words that are broken up due to ambiguities that are
+        difficult to resolve:
+        - 'tis (becomes ["'", "tis"])
+        - U.S. (becomes ["U", ".", "S", "."])
+        """
+        regex = r"(?:\d+(?:\.\d+)*|[\w<>]+)(?:[-'&]?(?:\d+(?:\.\d+)*|[\w<>]+))*|--|[^\w\s]"
+        delimiter = corpus["delimiter"]
+        if delimiter != "":
+            regex = regex + "|" + delimiter
+
+        text = corpus_file.read()
+        for token in re.findall(regex, text, re.UNICODE):
+            yield token
+    else:
+        for token in corpus_file.read().split(' '):
+            yield token
+
+def corpus_iter_chars(corpus):
     """
     Iterates over a corpus at the character level. Things are complicated by the
     fact that we have to scan for multicharacter tokens. Note that if a
     delimiter was provided, then it was added to `multichar_tokens` earlier. So
     we do not have to check for the delimiter explicitly.
     """
+
+    corpus_file = open(corpus["path"], mode='r', encoding=corpus["encoding"])
+    multichar_tokens = corpus["multichar_tokens"]
 
     # Used to keep track of previous characters that may be the start of a
     # multicharacter token.
@@ -82,11 +124,10 @@ def corpus_iter_chars(corpus_file, multichar_tokens):
                     break
 
 def corpus_iter(corpus, granularity):
-    with open(corpus["path"], mode='r', encoding=corpus["encoding"]) as f:
-        if granularity == Granularity.word:
-            return corpus_iter_words(f)
-        else:
-            return corpus_iter_chars(f, corpus["multichar_tokens"])
+    if granularity == WORD:
+        return corpus_iter_words(corpus)
+    else:
+        return corpus_iter_chars(corpus)
 
 def parse_corpus(corpus, vocab, granularity):
     doc = []
@@ -116,7 +157,7 @@ def parse_corpus(corpus, vocab, granularity):
 def process_corpus(corpus, vocab, manager, granularity):
     docs, doc_lengths, max_doc_len = parse_corpus(corpus, vocab, granularity)
 
-    frac = corpus["validation_frac"]
+    frac = corpus["validate_frac"]
     validate_docs = math.ceil(frac * len(docs))
     if frac != 1 and validate_docs == len(docs):
         print("Warning: requested fraction of validation documents rounds up " \
@@ -147,25 +188,24 @@ def process_corpus(corpus, vocab, manager, granularity):
 
         def write_data(parent, start_doc, end_doc):
             group = parent.create_group(basename)
-            group.create_dataset("contents", data=\
-                docs_array[start_doc:end_doc])
-            group.create_dataset("lengths", data=\
-                doc_lengths_array[start_doc:end_doc])
+            group.create_dataset("contents", data=docs_array[start_doc:end_doc])
+            group.create_dataset("lengths", data=doc_lengths_array[start_doc:end_doc])
 
         first_validate_doc = len(docs) - validate_docs
         if first_validate_doc != 0:
             write_data(manager.get_train_group(), 0, first_validate_doc)
         if validate_docs != 0:
-            write_data(manager.get_validate_group(), first_validate_doc, \
-                len(docs))
+            write_data(manager.get_validate_group(), first_validate_doc, len(docs))
 
-def consolidate(corpora, output_fp, granularity=Granularity.word):
+    print("'{}': {} documents processed.".format( \
+        os.path.basename(corpus["path"]), len(docs)))
+
+def consolidate(corpora, output_fp, granularity=WORD):
     """
     Consolidates the contents of `corpora` into `output_fp`.
 
     `granularity` determines whether tokens in the corpora are defined to be
-    words or characters. Allowed values are `Granularity.word` and
-    `Granularity.character`.
+    words or characters. Allowed values are `WORD` and `CHARACTER`.
 
     `corpora` must be an array of dictionaries, each of which must have the
     following keys:
@@ -175,11 +215,13 @@ def consolidate(corpora, output_fp, granularity=Granularity.word):
       **independent** documents separated by `delimiter`. This implies that
       context is not carried over from document to document, so that it is safe
       to shuffle the order of the documents. `delimiter` can consist of more
-      than one character, even if `granularity == Granularity.character`.
-    - `validation_frac`: Only allowed for files that consist of more than one
+      than one character, even if `granularity == CHARACTER`.
+    - `validate_frac`: Only allowed for files that consist of more than one
       document (so `delimiter` must be specified). The validation set is taken
       to be the last `n` documents in the file, where `n =
-      math.ceil(validation_frac * total_docs)`. The default value is `0`.
+      math.ceil(validate_frac * total_docs)`. The default value is `0`.
+    - `word_tokenization`: Only allowed if `granularity == WORD`. Allowed values
+      are `DEFAULT` (which is the default value) and `SPLIT_ON_SPACES`.
     - `multichar_tokens`: Can only be present if `granularity ==
       Granularity.character`. In this case, the value should be an array of
       strings. Each string in the array describes a word that should be treated
@@ -213,16 +255,33 @@ def consolidate(corpora, output_fp, granularity=Granularity.word):
     if len(corpora) == 0:
         raise RuntimeError("The list of corpora is empty.")
 
+    invalid_key = False
+    valid_keys = ["path", "encoding", "delimiter", "validate_frac", \
+        "word_tokenization", "multichar_tokens"]
+
     for corpus in corpora:
+        for key in corpus:
+            if not key in valid_keys:
+                print("Invalid key '{}'.".format(key), file=sys.stderr)
+                invalid_key = True
+
         if not "encoding" in corpus:
             corpus["encoding"] = "utf-8"
         if not "delimiter" in corpus:
             corpus["delimiter"] = ""
-        if not "validation_frac" in corpus:
-            corpus["validation_frac"] = 0
+        if not "validate_frac" in corpus:
+            corpus["validate_frac"] = 0
+
+        if "word_tokenization" in corpus:
+            if granularity == CHARACTER:
+                raise RuntimeError("The 'word_tokenization' key should only " \
+                    "be present when the corpora are parsed at word-level " \
+                    "granularity.")
+        else:
+            corpus["word_tokenization"] = DEFAULT
 
         if "multichar_tokens" in corpus:
-            if granularity != Granularity.character:
+            if granularity != CHARACTER:
                 raise RuntimeError("The 'multichar_tokens' key should only be " \
                     "present when the corpora are parsed at character-level " \
                     "granularity.")
@@ -233,6 +292,9 @@ def consolidate(corpora, output_fp, granularity=Granularity.word):
         else:
             corpus["multichar_tokens"] = []
 
+    if invalid_key:
+        raise RuntimeError("Unknown keys found.")
+
     vocab = {}
     output_file = h5py.File(output_fp, "w")
     manager = LazyGroupManager(output_file)
@@ -240,8 +302,10 @@ def consolidate(corpora, output_fp, granularity=Granularity.word):
     for corpus in corpora:
         process_corpus(corpus, vocab, manager, granularity)
 
+    for word in vocab:
+        print(word)
     max_len = max(len(word) for word in vocab)
     vocab_array = np.empty(shape=(len(vocab)), dtype=('S', max_len))
-    for token, index in vocab:
+    for token, index in vocab.items():
         vocab_array[index] = token
     output_file.create_dataset("vocab", data=vocab_array)
