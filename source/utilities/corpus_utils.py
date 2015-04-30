@@ -302,10 +302,10 @@ def consolidate(corpora, output_fp, granularity=WORD):
     for corpus in corpora:
         process_corpus(corpus, vocab, manager, granularity)
 
-    for word in vocab:
-        print(word)
-    max_len = max(len(word) for word in vocab)
-    vocab_array = np.empty(shape=(len(vocab)), dtype=('S', max_len))
-    for token, index in vocab.items():
-        vocab_array[index] = token
-    output_file.create_dataset("vocab", data=vocab_array)
+    # For compatibility with Torch, we have to serialize the strings as byte
+    # arrays.
+    byte_array = []
+    for token in sorted(vocab, key=vocab.get):
+        byte_array.extend(bytearray(token, encoding="utf-8"))
+        byte_array.append(0)
+    output_file.create_dataset("vocab", data=byte_array)
