@@ -169,7 +169,7 @@ function batch_documents(batch_size, max_bptt_len, data)
 		batch_lengths[batch_index][dst_index] = src_len
 
 		batch_actions[batch_index][off] = actions["new_document"]
-		for i = max_bptt_len, doc_len - 1, max_bptt_len do
+		for i = max_bptt_len, src_len - 1, max_bptt_len do
 			batch_actions[batch_index][off + i] = actions["truncate_bptt"]
 		end
 
