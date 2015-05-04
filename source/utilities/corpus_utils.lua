@@ -60,8 +60,22 @@ function load_hdf5(fn)
 	local train_docs, train_lengths = merge_documents("train", data)
 	local validate_docs, validate_lengths = merge_documents("validate", data)
 
-	new_data = {
-		vocab = data["vocab"],
+	local vocab = {}
+	local cur_index = 0
+	local cur_word = {}
+
+	for i = 1, data["vocab"]:size(1) do
+		if data["vocab"][i] == 0 then
+			vocab[cur_index] = table.concat(cur_word, "")
+			cur_word = {}
+			cur_index = cur_index + 1
+		else
+			cur_word[#cur_word + 1] = string.char(data["vocab"][i])
+		end
+	end
+
+	local new_data = {
+		vocab = vocab,
 		train = {
 			documents = train_docs,
 			lengths = train_lengths
