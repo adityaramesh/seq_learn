@@ -1,6 +1,6 @@
 import sys
 sys.path.insert(0, "source/utilities")
-import corpus_utils as utils
+import consolidate_corpora as utils
 
 corpora = [
     {

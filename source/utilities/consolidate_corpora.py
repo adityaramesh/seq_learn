@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Takes a dictionary describing a corpora and puts the contents into a single file
-on which a model can be easily trained.
+that makes preprocessing and training easier.
 """
 
 import sys
@@ -13,9 +13,11 @@ import re
 import math
 import numpy as np
 
+# Used to control corpus granularity.
 WORD = 0
 CHARACTER = 1
 
+# Used to control word tokenization.
 DEFAULT = 0
 SPLIT_ON_SPACES = 1
 
@@ -303,7 +305,10 @@ def consolidate(corpora, output_fp, granularity=WORD):
         process_corpus(corpus, vocab, manager, granularity)
 
     # For compatibility with Torch, we have to serialize the strings as byte
-    # arrays.
+    # arrays. The cleanest way to serialize the strings is to join their UTF-8
+    # decoded byte arrays, using the null byte as the delimiter. We do not use
+    # this scheme for storing multi-document corpora, because it would make them
+    # difficult to shuffle.
     byte_array = []
     for token in sorted(vocab, key=vocab.get):
         byte_array.extend(bytearray(token, encoding="utf-8"))
