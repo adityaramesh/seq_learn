@@ -313,4 +313,6 @@ def consolidate(corpora, output_fp, granularity=WORD):
     for token in sorted(vocab, key=vocab.get):
         byte_array.extend(bytearray(token, encoding="utf-8"))
         byte_array.append(0)
-    output_file.create_dataset("vocab", data=byte_array)
+
+    byte_np_array = np.array(byte_array, dtype=np.uint8)
+    output_file.create_dataset("vocab", data=byte_np_array)
