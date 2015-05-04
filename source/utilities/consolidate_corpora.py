@@ -77,8 +77,9 @@ def corpus_iter_words(corpus):
         for token in re.findall(regex, text, re.UNICODE):
             yield token
     else:
-        for token in corpus_file.read().split(' '):
-            yield token
+        for line in corpus_file.readlines():
+            for token in line.strip(" ").split(" "):
+                yield token
 
 def corpus_iter_chars(corpus):
     """
@@ -163,7 +164,7 @@ def process_corpus(corpus, vocab, manager, granularity):
     validate_docs = math.ceil(frac * len(docs))
     if frac != 1 and validate_docs == len(docs):
         print("Warning: requested fraction of validation documents rounds up " \
-            "to total number of documents in corpus '{}'.".format(corpus.path), \
+            "to total number of documents in corpus '{}'.".format(corpus["path"]), \
             file=sys.stderr)
 
     basename = os.path.basename(corpus["path"])
@@ -182,7 +183,10 @@ def process_corpus(corpus, vocab, manager, granularity):
     else:
         perm = np.random.permutation(len(docs))
         docs_array = np.zeros(shape=(len(docs), max_doc_len), dtype=np.uint32)
-        doc_lengths_array = np.array(doc_lengths, dtype=np.uint32)
+        doc_lengths_array = np.empty(shape=(len(docs)), dtype=np.uint32)
+
+        for i, j in enumerate(perm):
+            doc_lengths_array[j] = doc_lengths[i]
 
         for i, doc in enumerate(docs):
             for j, index in enumerate(doc):
