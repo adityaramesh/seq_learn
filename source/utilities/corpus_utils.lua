@@ -150,10 +150,11 @@ function batch_documents(batch_size, max_bptt_len, data)
 	-- components of the network in batch mode. Suppose we have 10
 	-- documents and the batch size is 4. Then the first component will see
 	-- documents 1, 5, 9; the second, 2, 6, 10; the third, 3 and 7; and the
-	-- fourth, 4 and 8. The matrix of document lengths must have three
-	-- columns.
-	local batch_lengths = torch.IntTensor(batch_size,
-		1 + math.floor((doc_count - 1) / batch_size))
+	-- fourth, 4 and 8. In this case, `batch_counts == [3, 3, 2, 2]`.
+	local batch_counts = torch.IntTensor(batch_size)
+	for i = 1, batch_size do
+		batch_counts[i] = 1 + math.floor((doc_count - i) / batch_size)
+	end
 
 	-- Copies data from the original arrays to the arrays that are designed
 	-- for batch mode processing by the network.
@@ -166,7 +167,6 @@ function batch_documents(batch_size, max_bptt_len, data)
 
 		batch_data[{batch_index, {off, off + src_len - 1}}] =
 			data["documents"][{src_index, {1, src_len}}]
-		batch_lengths[batch_index][dst_index] = src_len
 
 		for i = max_bptt_len, src_len - 1, max_bptt_len do
 			batch_actions[batch_index][off + i] = actions["truncate_bptt"]
@@ -188,7 +188,7 @@ function batch_documents(batch_size, max_bptt_len, data)
 
 	return {
 		data = batch_data,
-		lengths = batch_lengths,
+		counts = batch_counts,
 		actions = batch_actions
 	}
 end
