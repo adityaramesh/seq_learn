@@ -92,8 +92,8 @@ function load_hdf5(fn)
 end
 
 actions = {
-	new_document = 0,
-	truncate_bptt = 1
+	truncate_bptt = 0,
+	end_document = 1
 }
 
 --
@@ -168,10 +168,10 @@ function batch_documents(batch_size, max_bptt_len, data)
 			data["documents"][{src_index, {1, src_len}}]
 		batch_lengths[batch_index][dst_index] = src_len
 
-		batch_actions[batch_index][off] = actions["new_document"]
 		for i = max_bptt_len, src_len - 1, max_bptt_len do
 			batch_actions[batch_index][off + i] = actions["truncate_bptt"]
 		end
+		batch_actions[batch_index][off + src_len - 1] = actions["end_document"]
 
 		-- Observe that we are setting this to the position of the
 		-- character *after* the end of the document.
