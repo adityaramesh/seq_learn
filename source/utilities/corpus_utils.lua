@@ -10,7 +10,7 @@ local function merge_documents(category, data)
 	local max_doc_len = 0
 	local doc_count = 0
 
-	for corpus in data[category] do
+	for name, corpus in pairs(data[category]) do
 		if corpus["contents"] == nil then
 			error("\"contents\" key must be present for all corpora.")
 		end
@@ -33,24 +33,26 @@ local function merge_documents(category, data)
 	end
 
 	-- Now we allocate the memory and perform the copies.
-	docs = torch.IntTensor(doc_count, max_doc_len):zero()
-	lengths = torch.IntTensor(doc_count)
-	cur_doc = 1
+	local docs = torch.IntTensor(doc_count, max_doc_len):zero()
+	local lengths = torch.IntTensor(doc_count)
+	local cur_doc = 1
 
-	for corpus in data[category] do
+	for name, corpus in pairs(data[category]) do
 		if corpus["lengths"] ~= nil then
 			rows = corpus["contents"]:size(1)
 			cols = corpus["contents"]:size(2)
-			docs[{{cur_doc, cur_doc + rows}, {1, cols}}] = corpus["contents"]
-			lengths[{{cur_doc, cur_doc + rows}}] = corpus["lengths"]
-			cur_doc = cur_doc + rows + 1
+			docs[{{cur_doc, cur_doc + rows - 1}, {1, cols}}] = corpus["contents"]
+			lengths[{{cur_doc, cur_doc + rows - 1}}] = corpus["lengths"]
+			cur_doc = cur_doc + rows
 		else
-			docs[cur_doc] = corpus["contents"]
+			cols = corpus["contents"]:size(1)
+			docs[{cur_doc, {1, cols}}] = corpus["contents"]
+			lengths[cur_doc] = cols
 			cur_doc = cur_doc + 1
 		end
 	end
 
-	return cur_doc, lengths
+	return docs, lengths
 end
 
 function load_hdf5(fn)
@@ -85,8 +87,8 @@ actions = {
 -- a format that can be fed into an RNN in batch mode.
 --
 function batch_documents(batch_size, max_bptt_len, data)
-	local doc_count = data["lengths"]:size()
-	assert(batch_size >= doc_count)
+	local doc_count = data["lengths"]:size(1)
+	assert(batch_size <= doc_count)
 
 	--
 	-- Suppose that `batch_size == 2`. Then the first component of the input
@@ -105,13 +107,15 @@ function batch_documents(batch_size, max_bptt_len, data)
 	-- index minus one and modulo `batch_size` is `i - 1`. In the example
 	-- above, this value is 17 + 7 = 24.
 	--
+	local perm = torch.randperm(doc_count)
 	local batch_lengths = torch.IntTensor(batch_size):zero()
+
 	for i = 1, doc_count, batch_size do
 		local batches = i + batch_size - 1 > doc_count and
 			doc_count % batch_size or batch_size
-		for j = 0, batches - 1 do
-			batch_lengths[j] = math.max(batch_lengths[j],
-				data["lengths"][i + j])
+		for j = 1, batches do
+			batch_lengths[j] = batch_lengths[j] +
+				data["lengths"][perm[i + j - 1]]
 		end
 	end
 
@@ -126,18 +130,19 @@ function batch_documents(batch_size, max_bptt_len, data)
 	local batch_lengths = torch.IntTensor(batch_size,
 		1 + math.floor((doc_count - 1) / batch_size))
 
-	local function process_document(batch, doc)
+	local function process_document(batch, doc_index)
+		local doc = perm[doc_index]
 		local pos = batch_pos[batch]
 		local doc_len = data["lengths"][doc]
-		local batch_doc = 1 + math.floor((doc - 1) / batch_size)
+		local batch_doc = 1 + math.floor((doc_index - 1) / batch_size)
 
 		batch_data[{batch, {pos, pos + doc_len - 1}}] =
-			data["documents"][{{1, doc_len}}]
+			data["documents"][{doc, {1, doc_len}}]
 		batch_lengths[batch][batch_doc] = doc_len
 
-		batch_actions[pos] = actions[new_document]
+		batch_actions[batch][pos] = actions["new_document"]
 		for i = max_bptt_len, doc_len - 1, max_bptt_len do
-			batch_actions[batch][pos + i] = actions[bptt_break]
+			batch_actions[batch][pos + i] = actions["bptt_break"]
 		end
 
 		-- Observe that we are setting this to the position of the
@@ -145,12 +150,11 @@ function batch_documents(batch_size, max_bptt_len, data)
 		batch_pos[batch] = batch_pos[batch] + doc_len
 	end
 
-	local perm = torch.randperm(doc_count)
 	for i = 1, doc_count, batch_size do
 		local batches = i + batch_size - 1 > doc_count and
 			doc_count % batch_size or batch_size
 		for j = 1, batches do
-			process_document(j, perm[i + j - 1])
+			process_document(j, i + j - 1)
 		end
 	end
 
