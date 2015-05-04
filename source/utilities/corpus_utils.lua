@@ -93,7 +93,7 @@ end
 
 actions = {
 	new_document = 0,
-	bptt_break = 1
+	truncate_bptt = 1
 }
 
 --
@@ -133,35 +133,49 @@ function batch_documents(batch_size, max_bptt_len, data)
 		end
 	end
 
+	-- We need a separate array of actions to figure when each component of
+	-- the network in batch mode needs to save or clear its context.
 	local batch_actions = {}
 	for i = 1, batch_size do
 		batch_actions[i] = {}
 	end
 
 	local max_seq_len = batch_lengths:max()
-	local batch_pos = torch.IntTensor(batch_size):fill(1)
+
+	-- Used to keep track of the offsets into the `batch_data` array.
+	local batch_off = torch.IntTensor(batch_size):fill(1)
 	local batch_data = torch.IntTensor(batch_size, max_seq_len)
+
+	-- Used to keep track of the length of the documents seen by each of the
+	-- components of the network in batch mode. Suppose we have 10
+	-- documents and the batch size is 4. Then the first component will see
+	-- documents 1, 5, 9; the second, 2, 6, 10; the third, 3 and 7; and the
+	-- fourth, 4 and 8. The matrix of document lengths must have three
+	-- columns.
 	local batch_lengths = torch.IntTensor(batch_size,
 		1 + math.floor((doc_count - 1) / batch_size))
 
-	local function process_document(batch, doc_index)
-		local doc = perm[doc_index]
-		local pos = batch_pos[batch]
-		local doc_len = data["lengths"][doc]
-		local batch_doc = 1 + math.floor((doc_index - 1) / batch_size)
+	-- Copies data from the original arrays to the arrays that are designed
+	-- for batch mode processing by the network.
+	local function process_document(batch_index, doc_index)
+		local off = batch_off[batch_index]
+		local dst_index = 1 + math.floor((doc_index - 1) / batch_size)
 
-		batch_data[{batch, {pos, pos + doc_len - 1}}] =
-			data["documents"][{doc, {1, doc_len}}]
-		batch_lengths[batch][batch_doc] = doc_len
+		local src_index = perm[doc_index]
+		local src_len = data["lengths"][src_index]
 
-		batch_actions[batch][pos] = actions["new_document"]
+		batch_data[{batch_index, {off, off + src_len - 1}}] =
+			data["documents"][{src_index, {1, src_len}}]
+		batch_lengths[batch_index][dst_index] = src_len
+
+		batch_actions[batch_index][off] = actions["new_document"]
 		for i = max_bptt_len, doc_len - 1, max_bptt_len do
-			batch_actions[batch][pos + i] = actions["bptt_break"]
+			batch_actions[batch_index][off + i] = actions["truncate_bptt"]
 		end
 
 		-- Observe that we are setting this to the position of the
 		-- character *after* the end of the document.
-		batch_pos[batch] = batch_pos[batch] + doc_len
+		batch_off[batch_index] = batch_off[batch_index] + src_len
 	end
 
 	for i = 1, doc_count, batch_size do
