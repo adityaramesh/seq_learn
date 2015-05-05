@@ -11,19 +11,19 @@ local function merge_documents(category, data)
 	local doc_count = 0
 
 	for name, corpus in pairs(data[category]) do
-		if corpus["contents"] == nil then
+		if corpus.contents == nil then
 			error("\"contents\" key must be present for all corpora.")
 		end
 
-		if corpus["lengths"] ~= nil then
-			local doc_len = corpus["contents"]:size(2)
+		if corpus.lengths ~= nil then
+			local doc_len = corpus.contents:size(2)
 			assert(doc_len > 0)
 
 			-- The corpus consists of multiple documents.
 			max_doc_len = math.max(max_doc_len, doc_len)
-			doc_count = doc_count + corpus["contents"]:size(1)
+			doc_count = doc_count + corpus.contents:size(1)
 		else
-			local doc_len = corpus["contents"]:size(1)
+			local doc_len = corpus.contents:size(1)
 			assert(doc_len > 0)
 
 			-- The corpus consists of only one document.
@@ -38,15 +38,15 @@ local function merge_documents(category, data)
 	local cur_doc = 1
 
 	for name, corpus in pairs(data[category]) do
-		if corpus["lengths"] ~= nil then
-			rows = corpus["contents"]:size(1)
-			cols = corpus["contents"]:size(2)
-			docs[{{cur_doc, cur_doc + rows - 1}, {1, cols}}] = corpus["contents"]
-			lengths[{{cur_doc, cur_doc + rows - 1}}] = corpus["lengths"]
+		if corpus.lengths ~= nil then
+			rows = corpus.contents:size(1)
+			cols = corpus.contents:size(2)
+			docs[{{cur_doc, cur_doc + rows - 1}, {1, cols}}] = corpus.contents
+			lengths[{{cur_doc, cur_doc + rows - 1}}] = corpus.lengths
 			cur_doc = cur_doc + rows
 		else
-			cols = corpus["contents"]:size(1)
-			docs[{cur_doc, {1, cols}}] = corpus["contents"]
+			cols = corpus.contents:size(1)
+			docs[{cur_doc, {1, cols}}] = corpus.contents
 			lengths[cur_doc] = cols
 			cur_doc = cur_doc + 1
 		end
@@ -64,13 +64,13 @@ function load_hdf5(fn)
 	local cur_index = 0
 	local cur_word = {}
 
-	for i = 1, data["vocab"]:size(1) do
-		if data["vocab"][i] == 0 then
+	for i = 1, data.vocab:size(1) do
+		if data.vocab[i] == 0 then
 			vocab[cur_index] = table.concat(cur_word, "")
 			cur_word = {}
 			cur_index = cur_index + 1
 		else
-			cur_word[#cur_word + 1] = string.char(data["vocab"][i])
+			cur_word[#cur_word + 1] = string.char(data.vocab[i])
 		end
 	end
 
@@ -101,7 +101,7 @@ actions = {
 -- a format that can be fed into an RNN in batch mode.
 --
 function batch_documents(batch_size, max_bptt_len, data)
-	local doc_count = data["lengths"]:size(1)
+	local doc_count = data.lengths:size(1)
 	assert(batch_size <= doc_count)
 
 	--
@@ -129,7 +129,7 @@ function batch_documents(batch_size, max_bptt_len, data)
 			doc_count % batch_size or batch_size
 		for j = 1, batches do
 			batch_lengths[j] = batch_lengths[j] +
-				data["lengths"][perm[i + j - 1]]
+				data.lengths[perm[i + j - 1]]
 		end
 	end
 
@@ -163,15 +163,15 @@ function batch_documents(batch_size, max_bptt_len, data)
 		local dst_index = 1 + math.floor((doc_index - 1) / batch_size)
 
 		local src_index = perm[doc_index]
-		local src_len = data["lengths"][src_index]
+		local src_len = data.lengths[src_index]
 
 		batch_data[{batch_index, {off, off + src_len - 1}}] =
-			data["documents"][{src_index, {1, src_len}}]
+			data.documents[{src_index, {1, src_len}}]
 
 		for i = max_bptt_len, src_len - 1, max_bptt_len do
-			batch_actions[batch_index][off + i] = actions["truncate_bptt"]
+			batch_actions[batch_index][off + i] = actions.truncate_bptt
 		end
-		batch_actions[batch_index][off + src_len - 1] = actions["end_document"]
+		batch_actions[batch_index][off + src_len - 1] = actions.end_document
 
 		-- Observe that we are setting this to the position of the
 		-- character *after* the end of the document.
