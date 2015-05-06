@@ -1,6 +1,4 @@
 require "torch"
-require "optim"
-require "xlua"
 require "lfs"
 
 local function remove_file_if_exists(file, silent)
@@ -207,7 +205,7 @@ local function deserialize(paths, model_func, train_func)
 	end
 end
 
-local function save_train_progress(train_perp, paths, info)
+local function save_train_progress(new_best, paths, info)
 	print("Saving current model and training info.")
 	rename_file_if_exists(paths.cur_model_fn,
 		paths.cur_model_backup_fn, true)
@@ -216,9 +214,7 @@ local function save_train_progress(train_perp, paths, info)
 	torch.save(paths.cur_model_fn, info.model)
 	torch.save(paths.cur_train_info_fn, info.train)
 
-	if train_perp < info.acc.best_train then
-		info.acc.best_train = train_perp
-
+	if new_best then
 		print("New best train perplexity: updating hard links.")
 		rename_file_if_exists(paths.best_train_model_fn,
 			paths.best_train_model_backup_fn, true)
@@ -242,10 +238,8 @@ local function save_train_progress(train_perp, paths, info)
 	remove_file_if_exists(paths.cur_train_info_backup_fn, true)
 end
 
-local function save_test_progress(test_perp, paths, info)
-	if test_perp < info.acc.best_test then
-		info.acc.best_test = test_perp
-
+function save_test_progress(new_best, paths, info)
+	if new_best then
 		print("New best test perplexity: updating hard links.")
 		rename_file_if_exists(paths.best_test_model_fn,
 			paths.best_test_model_backup_fn, true)
@@ -273,17 +267,26 @@ function start(model_func, train_func)
 
 	-- Define the paths to the output files for serialization.
 	local paths = {
-		cur_model_fn        = paths.concat(output_dir, "cur_model.t7"),
-		best_train_model_fn = paths.concat(output_dir, "best_train_model.t7"),
-		best_test_model_fn  = paths.concat(output_dir, "best_test_model.t7"),
+		cur_model_fn = paths.concat(output_dir,
+			"cur_model.t7"),
+		best_train_model_fn = paths.concat(output_dir,
+			"best_train_model.t7"),
+		best_test_model_fn = paths.concat(output_dir,
+			"best_test_model.t7"),
 
-		cur_train_info_fn        = paths.concat(output_dir, "cur_train_info.t7"),
-		best_train_train_info_fn = paths.concat(output_dir, "best_train_train_info.t7"),
-		best_test_train_info_fn  = paths.concat(output_dir, "best_test_train_info.t7"),
+		cur_train_info_fn = paths.concat(output_dir,
+			"cur_train_info.t7"),
+		best_train_train_info_fn = paths.concat(output_dir,
+			"best_train_train_info.t7"),
+		best_test_train_info_fn = paths.concat(output_dir,
+			"best_test_train_info.t7"),
 
-		cur_model_backup_fn        = paths.concat(output_dir, "cur_model_backup.t7"),
-		best_train_model_backup_fn = paths.concat(output_dir, "best_train_model_backup.t7"),
-		best_test_model_backup_fn  = paths.concat(output_dir, "best_test_model_backup.t7"),
+		cur_model_backup_fn = paths.concat(output_dir,
+			"cur_model_backup.t7"),
+		best_train_model_backup_fn = paths.concat(output_dir,
+			"best_train_model_backup.t7"),
+		best_test_model_backup_fn = paths.concat(output_dir,
+			"best_test_model_backup.t7"),
 
 		cur_train_info_backup_fn = paths.concat(
 			output_dir, "cur_train_info_backup.t7"),
@@ -292,19 +295,18 @@ function start(model_func, train_func)
 		best_test_train_info_backup_fn = paths.concat(
 			output_dir, "best_test_train_info_backup.t7"),
 
-		acc_info_fn = paths.concat(output_dir, "acc_info.t7"),
-		acc_info_backup_fn = paths.concat(output_dir, "acc_info_backup.t7")
+		acc_info_fn = paths.concat(output_dir,
+			"acc_info.t7"),
+		acc_info_backup_fn = paths.concat(output_dir,
+			"acc_info_backup.t7")
 	}
 
 	print("Checking for backups.")
 	restore_backups(paths)
 	print("Loading data.")
-	local data = task_func()
 	local info = deserialize(paths, model_func, train_info)
 
 	local do_train = opt.task ~= "evaluate"
 	local do_test = true
-	if not do_train and not do_test then
-		error("No training or test data specified; nothing to do.")
-	end
+	return do_train, do_test, paths, info
 end
