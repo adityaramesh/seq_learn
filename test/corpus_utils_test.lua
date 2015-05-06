@@ -37,14 +37,16 @@ end
 print("Checking consistency of batch-processed data.")
 batch_size = 20
 max_bptt_len = 200
-batch_data = batch_documents(batch_size, max_bptt_len, data["train"])
+batch_data = batch_documents(batch_size, data["train"])
 
 lines = {}
 for i = 1, batch_size do
 	cur_line = {""}
-	for j = 1, batch_data["data"]:size(2) do
+	cur_doc_index = 1
+	for j = 1, batch_data["lengths"][i] do
 		cur_line[#cur_line + 1] = data["vocab"][batch_data["data"][i][j]]
-		if batch_data["actions"][i][j] == actions["end_document"] then
+		if j == batch_data["boundaries"][i][cur_doc_index] then
+			cur_doc_index = cur_doc_index + 1
 			cur_line[#cur_line + 1] = ""
 			lines[#lines + 1] = table.concat(cur_line, " ")
 			cur_line = {""}

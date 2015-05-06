@@ -91,16 +91,11 @@ function load_hdf5(fn)
 	return new_data
 end
 
-actions = {
-	truncate_bptt = 0,
-	end_document = 1
-}
-
 --
 -- Used to put the training or validation documents returned by `load_hdf5` into
 -- a format that can be fed into an RNN in batch mode.
 --
-function batch_documents(batch_size, max_bptt_len, data)
+function batch_documents(batch_size, data)
 	local doc_count = data.lengths:size(1)
 	assert(batch_size <= doc_count)
 
@@ -133,45 +128,39 @@ function batch_documents(batch_size, max_bptt_len, data)
 		end
 	end
 
-	-- We need a separate array of actions to figure when each component of
-	-- the network in batch mode needs to save or clear its context.
-	local batch_actions = {}
-	for i = 1, batch_size do
-		batch_actions[i] = {}
-	end
+	local max_len = batch_lengths:max()
 
-	local max_seq_len = batch_lengths:max()
-
-	-- Used to keep track of the offsets into the `batch_data` array.
-	local batch_off = torch.IntTensor(batch_size):fill(1)
-	local batch_data = torch.IntTensor(batch_size, max_seq_len)
-
-	-- Used to keep track of the length of the documents seen by each of the
-	-- components of the network in batch mode. Suppose we have 10
-	-- documents and the batch size is 4. Then the first component will see
-	-- documents 1, 5, 9; the second, 2, 6, 10; the third, 3 and 7; and the
-	-- fourth, 4 and 8. In this case, `batch_counts == [3, 3, 2, 2]`.
+	-- Used to keep track of the number of the documents seen by each of the
+	-- components of the network in batch mode. Suppose we have 10 documents
+	-- and the batch size is 4. Then the first component will see documents
+	-- 1, 5, 9; the second, 2, 6, 10; the third, 3 and 7; and the fourth, 4
+	-- and 8. In this case, `batch_counts == [3, 3, 2, 2]`.
 	local batch_counts = torch.IntTensor(batch_size)
 	for i = 1, batch_size do
 		batch_counts[i] = 1 + math.floor((doc_count - i) / batch_size)
 	end
 
+	-- Used to keep track of the offsets into the `batch_data` array.
+	local batch_off = torch.IntTensor(batch_size):fill(1)
+	local batch_prev_bds = torch.IntTensor(batch_size):fill(0)
+	local batch_data = torch.IntTensor(batch_size, max_len)
+	local batch_boundaries = torch.IntTensor(batch_size,
+		1 + math.floor((doc_count - 1) / batch_size))
+
 	-- Copies data from the original arrays to the arrays that are designed
 	-- for batch mode processing by the network.
 	local function process_document(batch_index, doc_index)
 		local off = batch_off[batch_index]
-		local dst_index = 1 + math.floor((doc_index - 1) / batch_size)
-
 		local src_index = perm[doc_index]
 		local src_len = data.lengths[src_index]
+		local dst_index = 1 + math.floor((doc_index - 1) / batch_size)
 
 		batch_data[{batch_index, {off, off + src_len - 1}}] =
 			data.documents[{src_index, {1, src_len}}]
-
-		for i = max_bptt_len, src_len - 1, max_bptt_len do
-			batch_actions[batch_index][off + i] = actions.truncate_bptt
-		end
-		batch_actions[batch_index][off + src_len - 1] = actions.end_document
+		batch_boundaries[batch_index][dst_index] =
+			src_len + batch_prev_bds[batch_index]
+		batch_prev_bds[batch_index] =
+			batch_boundaries[batch_index][dst_index]
 
 		-- Observe that we are setting this to the position of the
 		-- character *after* the end of the document.
@@ -189,6 +178,7 @@ function batch_documents(batch_size, max_bptt_len, data)
 	return {
 		data = batch_data,
 		counts = batch_counts,
-		actions = batch_actions
+		lengths = batch_lengths,
+		boundaries = batch_boundaries
 	}
 end
