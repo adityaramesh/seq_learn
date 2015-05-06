@@ -120,6 +120,8 @@ local function parse_arguments()
 end
 
 local function restore_backups(paths)
+	print("Checking for backups.")
+
 	-- Deal with the backup files.
 	local status = true
 	status = status and rename_backup(paths.cur_model_backup_fn,
@@ -147,7 +149,7 @@ local function restore_backups(paths)
 	end
 end
 
-local function deserialize(paths, model_func, train_func)
+local function deserialize(paths, model_info_func, train_info_func)
 	-- Determine the files from which we are to restore the model and
 	-- training info states.
 	local target_model_fn = ""
@@ -179,7 +181,7 @@ local function deserialize(paths, model_func, train_func)
 			error("Model file `" .. target_model_fn .. "` not found.")
 		end
 		print("Creating new model.")
-		model_info = model_func()
+		model_info = model_info_func()
 	end
 
 	if paths.filep(target_train_info_fn) then
@@ -190,7 +192,7 @@ local function deserialize(paths, model_func, train_func)
 			error("Train info file `" .. target_train_info_fn .. "` not found.")
 		end
 		print("Initializing training state.")
-		train_info = train_func()
+		train_info = train_info_func()
 	end
 
 	if paths.filep(acc_info_fn) then
@@ -205,7 +207,7 @@ local function deserialize(paths, model_func, train_func)
 	end
 end
 
-local function save_train_progress(new_best, paths, info)
+function save_train_progress(new_best, paths, info)
 	print("Saving current model and training info.")
 	rename_file_if_exists(paths.cur_model_fn,
 		paths.cur_model_backup_fn, true)
@@ -260,7 +262,7 @@ function save_test_progress(new_best, paths, info)
 	end
 end
 
-function start(model_func, train_func)
+function restore(model_info_func, train_info_func)
 	local models_dir = "models"
 	local model_name = opt.model
 	local output_dir = paths.concat(models_dir, model_name)
@@ -301,10 +303,8 @@ function start(model_func, train_func)
 			"acc_info_backup.t7")
 	}
 
-	print("Checking for backups.")
 	restore_backups(paths)
-	print("Loading data.")
-	local info = deserialize(paths, model_func, train_info)
+	local info = deserialize(paths, model_info_func, train_info)
 
 	local do_train = opt.task ~= "evaluate"
 	local do_test = true
