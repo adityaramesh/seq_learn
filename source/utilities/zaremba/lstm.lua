@@ -28,7 +28,7 @@ require "nngraph"
 require "xlua"
 local LookupTable = nn.LookupTable
 
-require "source/utilities/serialization"
+require "torch_utils/model_utils"
 require "source/utilities/zaremba/base"
 local ptb = require "source/utilities/zaremba/data"
 
@@ -202,10 +202,6 @@ local function forward(data, mode, params, info, context)
 		info.train[mode].pos = info.train[mode].pos + 1
 	end
 
-	if info.train.iter == 0 then
-		print(context.rnns[i].output)
-	end
-
 	g_replace_table(info.model.start_s, info.model.s[info.train.bptt_len])
 	return info.model.err:mean()
 end
@@ -258,7 +254,7 @@ function run(params)
 	print("Loading validation data.")
 	local valid_data = {data = transfer_data(ptb.validdataset(params.batch_size))}
 
-	local do_train, do_test, paths, info = restore(
+	local do_train, do_test, paths, info = model_utils.restore(
 		function() return get_model_info(params) end,
 		function() return get_train_info(params) end
 	)
@@ -286,7 +282,7 @@ function run(params)
 			local since_beg = g_d(torch.toc(start_time) / 60)
 
 			perp = perplexity(info.train.perps:mean(), params)
-			save_train_progress(function(x, y) return x < y end,
+			model_utils.save_train_progress(function(x, y) return x < y end,
 				info.train.epoch + info.train.iter / inputs_per_epoch,
 				perp, paths, info)
 
@@ -301,7 +297,7 @@ function run(params)
 		if info.train.iter % inputs_per_epoch == 0 then
 			perp = validate(valid_data, params, info, context)
 			print("Validation set perplexity: " .. g_f3(perp))
-			save_test_progress(function(x, y) return x < y end,
+			model_utils.save_test_progress(function(x, y) return x < y end,
 				info.train.epoch, perp, paths, info)
 
 			info.train.epoch = info.train.epoch + 1
