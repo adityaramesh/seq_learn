@@ -11,11 +11,13 @@ A collection of experiments for sequence learning using RNN's.
 
 # TODO
 
-- Revised version of `run_model.lua`.
-  - Instead of writing a driver file for each experiment, just make the names of
-  the relevant files command-line parameters.
-  - Fix the bug when using `replace` but the file does not exist.
-  - Revise the script so that there is no global state.
+- Add support for saving training and validation errors in a format that makes
+it easy to graph progress using Python.
+- Decouple the network and the criterion, and integrate RNNContext with
+Zaremba's code.
+- Get the window-based BPTT working.
+  - Print out the mean and std of the number of documents processed per window.
+  This should be used to compare against the hard cutoff BPTT strategy.
 - Add the sudden decay strategy used by Zaremba's code as a schedule to `sopt`.
 
 # Things to Try

@@ -28,10 +28,6 @@ local function remove_empty_directory(dir, silent)
 end
 
 local function remove_directory(dir, silent)
-	if not paths.dirp(dir) then
-		return
-	end
-
 	for file in lfs.dir(dir) do
 		local path = paths.concat(dir, file)
 		if lfs.attributes(path, "mode") ~= "directory" then
@@ -85,38 +81,48 @@ local function rename_backup(backup, new)
 	return true
 end
 
-local function parse_arguments()
+local function parse_arguments(models_dir)
 	if not opt then
 		local cmd = torch.CmdLine()
 		cmd:text("Select one of the following options:")
 		cmd:option("-task", "create", "create | resume | replace | evaluate")
 		cmd:option("-model", "test", "The model name.")
 		cmd:option("-version", "current", "current | best_train | best_test")
-		cmd:option("-device", 0, "GPU device number.")
+		cmd:option("-device", 1, "GPU device number.")
 		opt = cmd:parse(arg or {})
 	end
 
-	if string.match(model_name, "^[A-Za-z0-9_]+") == nil then
-		error("Invalid model name `" .. model_name .. "`.")
+	print("Using device " .. opt.device .. ".")
+	cutorch.setDevice(opt.device)
+	torch.manualSeed(1)
+	cutorch.manualSeed(1)
+	torch.zeros(1, 1):cuda():uniform()
+
+	if string.match(opt.model, "^[A-Za-z0-9_]+") == nil then
+		error("Invalid model name `" .. opt.model .. "`.")
 	end
+
+	local models_dir = "models"
+	local output_dir = paths.concat(models_dir, opt.model)
 
 	if opt.task == "create" then
 		if paths.dirp(output_dir) then
-			error("Model `" .. model_name .. "` already exists.")
+			error("Model `" .. opt.model .. "` already exists.")
 		end
 		make_directory(output_dir)
 	elseif opt.task == "resume" or opt.task == "evaluate" then
 		if not paths.dirp(output_dir) then
-			error("Model `" .. model_name .. "` does not exist.")
+			error("Model `" .. opt.model .. "` does not exist.")
 		end
 	elseif opt.task == "replace" then
 		if paths.dirp(output_dir) then
 			remove_directory(output_dir)
-			make_directory(output_dir)
 		end
+		make_directory(output_dir)
 	else
 		error("Invalid task `" .. opt.task .. "`.")
 	end
+	return output_dir, opt
 end
 
 local function restore_backups(paths)
@@ -149,21 +155,21 @@ local function restore_backups(paths)
 	end
 end
 
-local function deserialize(paths, model_info_func, train_info_func)
+local function deserialize(opt, mpaths, model_info_func, train_info_func)
 	-- Determine the files from which we are to restore the model and
 	-- training info states.
 	local target_model_fn = ""
 	local target_train_info_fn = ""
 
 	if opt.version == "current" then
-		target_model_fn = paths.cur_model_fn
-		target_train_info_fn = paths.cur_train_info_fn
+		target_model_fn = mpaths.cur_model_fn
+		target_train_info_fn = mpaths.cur_train_info_fn
 	elseif opt.version == "best_train" then
-		target_model_fn = paths.best_train_model_fn
-		target_train_info_fn = paths.best_train_train_info_fn
+		target_model_fn = mpaths.best_train_model_fn
+		target_train_info_fn = mpaths.best_train_train_info_fn
 	elseif opt.version == "best_test" then
-		target_model_fn = paths.best_test_model_fn
-		target_train_info_fn = paths.best_test_train_info_fn
+		target_model_fn = mpaths.best_test_model_fn
+		target_train_info_fn = mpaths.best_test_train_info_fn
 	else
 		error("Invalid model version `" .. opt.version .. "`.")
 	end
@@ -195,9 +201,9 @@ local function deserialize(paths, model_info_func, train_info_func)
 		train_info = train_info_func()
 	end
 
-	if paths.filep(acc_info_fn) then
-		print("Restoring accuracy info from `" .. paths.acc_info_fn .. "`.")
-		acc_info = torch.load(paths.acc_info_fn)
+	if paths.filep(mpaths.acc_info_fn) then
+		print("Restoring accuracy info from `" .. mpaths.acc_info_fn .. "`.")
+		acc_info = torch.load(mpaths.acc_info_fn)
 	else
 		print("Initializing accuracy info.")
 		acc_info = {
@@ -205,39 +211,45 @@ local function deserialize(paths, model_info_func, train_info_func)
 			best_test = 1e10
 		}
 	end
+
+	return {
+		model = model_info,
+		train = train_info,
+		acc   = acc_info
+	}
 end
 
-function save_train_progress(new_best, paths, info)
+function save_train_progress(new_best, mpaths, info)
 	print("Saving current model and training info.")
-	rename_file_if_exists(paths.cur_model_fn,
-		paths.cur_model_backup_fn, true)
-	rename_file_if_exists(paths.cur_train_info_fn,
-		paths.cur_train_info_backup_fn, true)
-	torch.save(paths.cur_model_fn, info.model)
-	torch.save(paths.cur_train_info_fn, info.train)
+	rename_file_if_exists(mpaths.cur_model_fn,
+		mpaths.cur_model_backup_fn, true)
+	rename_file_if_exists(mpaths.cur_train_info_fn,
+		mpaths.cur_train_info_backup_fn, true)
+	torch.save(mpaths.cur_model_fn, info.model)
+	torch.save(mpaths.cur_train_info_fn, info.train)
 
 	if new_best then
 		print("New best train perplexity: updating hard links.")
-		rename_file_if_exists(paths.best_train_model_fn,
-			paths.best_train_model_backup_fn, true)
-		rename_file_if_exists(paths.best_train_train_info_fn,
-			paths.best_train_train_info_backup_fn, true)
-		create_hard_link(paths.cur_model_fn,
-			paths.best_train_model_fn, true)
-		create_hard_link(paths.cur_train_info_fn,
-			paths.best_train_train_info_fn, true)
-		remove_file_if_exists(paths.best_train_model_backup_fn, true)
-		remove_file_if_exists(paths.best_train_train_info_backup_fn, true)
+		rename_file_if_exists(mpaths.best_train_model_fn,
+			mpaths.best_train_model_backup_fn, true)
+		rename_file_if_exists(mpaths.best_train_train_info_fn,
+			mpaths.best_train_train_info_backup_fn, true)
+		create_hard_link(mpaths.cur_model_fn,
+			mpaths.best_train_model_fn, true)
+		create_hard_link(mpaths.cur_train_info_fn,
+			mpaths.best_train_train_info_fn, true)
+		remove_file_if_exists(mpaths.best_train_model_backup_fn, true)
+		remove_file_if_exists(mpaths.best_train_train_info_backup_fn, true)
 
 		print("Saving accuracy info.")
-		rename_file_if_exists(paths.acc_info_fn,
-			paths.acc_info_backup_fn, true)
-		torch.save(paths.acc_info_fn, info.acc)
-		remove_file_if_exists(paths.acc_info_backup_fn, true)
+		rename_file_if_exists(mpaths.acc_info_fn,
+			mpaths.acc_info_backup_fn, true)
+		torch.save(mpaths.acc_info_fn, info.acc)
+		remove_file_if_exists(mpaths.acc_info_backup_fn, true)
 	end
 
-	remove_file_if_exists(paths.cur_model_backup_fn, true)
-	remove_file_if_exists(paths.cur_train_info_backup_fn, true)
+	remove_file_if_exists(mpaths.cur_model_backup_fn, true)
+	remove_file_if_exists(mpaths.cur_train_info_backup_fn, true)
 end
 
 function save_test_progress(new_best, paths, info)
@@ -263,9 +275,7 @@ function save_test_progress(new_best, paths, info)
 end
 
 function restore(model_info_func, train_info_func)
-	local models_dir = "models"
-	local model_name = opt.model
-	local output_dir = paths.concat(models_dir, model_name)
+	local output_dir, opt = parse_arguments(models_dir)
 
 	-- Define the paths to the output files for serialization.
 	local paths = {
@@ -304,7 +314,7 @@ function restore(model_info_func, train_info_func)
 	}
 
 	restore_backups(paths)
-	local info = deserialize(paths, model_info_func, train_info)
+	local info = deserialize(opt, paths, model_info_func, train_info_func)
 
 	local do_train = opt.task ~= "evaluate"
 	local do_test = true
