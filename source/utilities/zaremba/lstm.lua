@@ -201,6 +201,11 @@ local function forward(data, mode, params, info, context)
 			context.rnns[i]:forward({x, y, s}))
 		info.train[mode].pos = info.train[mode].pos + 1
 	end
+
+	if info.train.iter == 0 then
+		print(context.rnns[i].output)
+	end
+
 	g_replace_table(info.model.start_s, info.model.s[info.train.bptt_len])
 	return info.model.err:mean()
 end
