@@ -205,6 +205,8 @@ function LSTM_RNN:forward(i, input, output, token_ends_doc)
 	assert(output:size(1) == params.batch_size)
 	assert(token_ends_doc:size(1) == params.batch_size)
 
+	-- Update the positions of the ends of the documents in the current
+	-- window.
 	self.token_ends_doc[i]:copy(token_ends_doc)
 	if i == 1 then
 		self.last_doc_endings:zero()
@@ -217,10 +219,18 @@ function LSTM_RNN:forward(i, input, output, token_ends_doc)
 
 	local prev_state
 	if i == 1 then
+		-- The previous state supplied to the first clone is the zero
+		-- state.
 		prev_state = self.zero_state
 	else if self.token_ends_doc[i - 1]:sum() == 0 then
+		-- If none of the batch_size tokens at the previous position
+		-- were at the ends of documents, then we can safely use the
+		-- previous state of the RNN without zeroing out any components.
 		prev_state = self.states[i - 1]
 	else
+		-- Some of the previous tokens were at the ends of documents, so
+		-- we have to zero out the corresponding components of the
+		-- state.
 		prev_state = self.prev_state[i]
 		for j = 1, 2 * model:layers() do
 			prev_state[j]:copy(self.states[i - 1][j])
@@ -253,6 +263,7 @@ function LSTM_RNN:backward(i, input, output)
 		end
 	end
 
+	-- See comments in `:forward()` if this does not make sense.
 	local prev_state
 	if i == 1 then
 		prev_state = self.zero_state
@@ -262,6 +273,9 @@ function LSTM_RNN:backward(i, input, output)
 		prev_state = self.prev_state[i]
 	end
 
+	-- This is similar to what we did in `:forward()`, except our object of
+	-- interest is now the next input gradient instead of the previous
+	-- state.
 	local next_state_grads
 	if i == self.batch_size then
 		next_state_grads = self.zero_state_grads
