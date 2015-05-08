@@ -208,7 +208,9 @@ local function deserialize(opt, mpaths, model_info_func, train_info_func)
 		print("Initializing accuracy info.")
 		acc_info = {
 			best_train = 1e10,
-			best_test = 1e10
+			best_test = 1e10,
+			train_scores = {},
+			test_scores = {}
 		}
 	end
 
@@ -219,7 +221,16 @@ local function deserialize(opt, mpaths, model_info_func, train_info_func)
 	}
 end
 
-function save_train_progress(new_best, mpaths, info)
+local function write_scores(fn, scores)
+	file = io.open(fn, "w")
+	file:write("Epoch\tScore\n")
+	for k, v in pairs(scores) do
+		file:write(k .. "\t" .. v .. "\n")
+	end
+	io.close(file)
+end
+
+function save_train_progress(func, epoch, new_score, mpaths, info)
 	print("Saving current model and training info.")
 	rename_file_if_exists(mpaths.cur_model_fn,
 		mpaths.cur_model_backup_fn, true)
@@ -228,7 +239,10 @@ function save_train_progress(new_best, mpaths, info)
 	torch.save(mpaths.cur_model_fn, info.model)
 	torch.save(mpaths.cur_train_info_fn, info.train)
 
-	if new_best then
+	if func(new_score, info.acc.best_train) then
+		info.acc.best_train = new_score
+		info.acc.train_scores[epoch] = new_score
+
 		print("New best train perplexity: updating hard links.")
 		rename_file_if_exists(mpaths.best_train_model_fn,
 			mpaths.best_train_model_backup_fn, true)
@@ -246,14 +260,21 @@ function save_train_progress(new_best, mpaths, info)
 			mpaths.acc_info_backup_fn, true)
 		torch.save(mpaths.acc_info_fn, info.acc)
 		remove_file_if_exists(mpaths.acc_info_backup_fn, true)
+
+		print("Updating train scores.")
+		remove_file_if_exists(mpaths.train_scores_fn, true)
+		write_scores(mpaths.train_scores_fn, info.acc.train_scores)
 	end
 
 	remove_file_if_exists(mpaths.cur_model_backup_fn, true)
 	remove_file_if_exists(mpaths.cur_train_info_backup_fn, true)
 end
 
-function save_test_progress(new_best, paths, info)
-	if new_best then
+function save_test_progress(func, epoch, new_score, paths, info)
+	if func(new_score, info.acc.best_test) then
+		info.acc.best_test = new_score
+		info.acc.test_scores[epoch] = new_score
+
 		print("New best test perplexity: updating hard links.")
 		rename_file_if_exists(paths.best_test_model_fn,
 			paths.best_test_model_backup_fn, true)
@@ -271,6 +292,10 @@ function save_test_progress(new_best, paths, info)
 			paths.acc_info_backup_fn, true)
 		torch.save(paths.acc_info_fn, info.acc)
 		remove_file_if_exists(paths.acc_info_backup_fn, true)
+
+		print("Updating test scores.")
+		remove_file_if_exists(mpaths.test_scores_fn, true)
+		write_scores(mpaths.test_scores_fn, info.acc.test_scores)
 	end
 end
 
@@ -307,10 +332,10 @@ function restore(model_info_func, train_info_func)
 		best_test_train_info_backup_fn = paths.concat(
 			output_dir, "best_test_train_info_backup.t7"),
 
-		acc_info_fn = paths.concat(output_dir,
-			"acc_info.t7"),
-		acc_info_backup_fn = paths.concat(output_dir,
-			"acc_info_backup.t7")
+		acc_info_fn = paths.concat(output_dir, "acc_info.t7"),
+		acc_info_backup_fn = paths.concat(output_dir, "acc_info_backup.t7"),
+		train_scores_fn = paths.concat(output_dir, "train_scores.csv"),
+		test_scores_fn = paths.concat(output_dir, "test_scores.csv")
 	}
 
 	restore_backups(paths)

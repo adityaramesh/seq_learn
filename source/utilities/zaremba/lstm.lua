@@ -279,14 +279,11 @@ function run(params)
 		if info.train.iter % torch.round(inputs_per_epoch / 10) == 10 then
 			local wps = torch.floor(total_cases / torch.toc(start_time))
 			local since_beg = g_d(torch.toc(start_time) / 60)
-			perp = perplexity(info.train.perps:mean(), params)
 
-			local new_best = false
-			if perp < info.acc.best_train then
-				info.acc.best_train = perp
-				new_best = true
-			end
-			save_train_progress(new_best, paths, info)
+			perp = perplexity(info.train.perps:mean(), params)
+			save_train_progress(function(x, y) return x < y end,
+				info.train.epoch + info.train.iter / inputs_per_epoch,
+				perp, paths, info)
 
 			print('epoch = '                  .. g_f3(info.train.epoch)   ..
 				', train perp. = '        .. g_f3(perp)               ..
@@ -299,13 +296,8 @@ function run(params)
 		if info.train.iter % inputs_per_epoch == 0 then
 			perp = validate(valid_data, params, info, context)
 			print("Validation set perplexity: " .. g_f3(perp))
-
-			local new_best = false
-			if perp < info.acc.best_test then
-				info.acc.best_test = perp
-				new_best = true
-			end
-			save_test_progress(new_best, paths, info)
+			save_test_progress(function(x, y) return x < y end,
+				info.train.epoch, perp, paths, info)
 
 			info.train.epoch = info.train.epoch + 1
 			if info.train.epoch > info.train.lr_decay_rate then
