@@ -11,11 +11,10 @@ A collection of experiments for sequence learning using RNN's.
 
 # TODO
 
-- Add support for saving training and validation errors in a format that makes
-it easy to graph progress using Python.
-- Decouple the network and the criterion, and integrate RNNContext with
-Zaremba's code.
 - Get the window-based BPTT working.
+  - Support for masking output gradients at _start_ of window.
+  - Test the LSTM RNN code on some dummy data and print out all of the state
+  information to make sure that it's working as expected.
   - Print out the mean and std of the number of documents processed per window.
   This should be used to compare against the hard cutoff BPTT strategy.
 - Add the sudden decay strategy used by Zaremba's code as a schedule to `sopt`.
