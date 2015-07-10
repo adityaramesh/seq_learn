@@ -53,7 +53,7 @@ local function clone_network(network, count)
 	end
 
 	local params_no_grad
-	if net.parametersNoGrad then
+	if network.parametersNoGrad then
 		params_no_grad = net:parametersNoGrad()
 	end
 
@@ -90,6 +90,10 @@ local function clone_network(network, count)
 end
 
 function LSTM_RNN.create(params)
+	local input       = nn.Identity()()
+	local lut         = nn.LookupTable(params.vocab_size, params.lstm_cell_width)(input)
+	local prev_output = lut
+
 	-- Used to access the states of the RNN at the previous timestep.
 	local prev_states       = nn.Identity()()
 	local prev_states_array = {prev_states:split(2 * params.layers)}
@@ -97,8 +101,6 @@ function LSTM_RNN.create(params)
 	-- Stores the states of the RNN at the current timestep. The cell states
 	-- and LSTM unit outputs from each layer are stored adjacently.
 	local cur_states  = {}
-	local lut         = nn.LookupTable(params.vocab_size, params.lstm_cell_width)(input)
-	local prev_output = lut
 
 	for i = 1, params.layers do
 		-- Get the states of the same LSTM unit from the previous
@@ -121,11 +123,10 @@ function LSTM_RNN.create(params)
 	local pred        = nn.LogSoftMax()(pred_func(pred_inputs))
 
 	-- Construct the module.
-	local input  = nn.Identity()()
 	local module = nn.gModule({input, prev_states}, {pred,
-		nn.Identity(cur_states), nn.Identity()(pred)}):cuda()
+		nn.Identity()(cur_states), nn.Identity()(pred)}):cuda()
 	module:getParameters():uniform(-params.max_init_weight_mag,
-		params.max_init_weight_max)
+		params.max_init_weight_mag)
 
 	local model = {
 		length = params.length,
@@ -133,13 +134,16 @@ function LSTM_RNN.create(params)
 		batch_size = params.batch_size,
 		network = module,
 		criterion = nn.ClassNLLCriterion():cuda(),
+		clones = clone_network(module, params.length),
 
 		-- Used to keep track of which tokens determine the end of
 		-- documents in the current window. Important for figuring out
 		-- when to use a new state instead of the previous one, or when
 		-- to use a zero input gradient instead of the next one.
 		token_ends_doc = torch.ByteTensor(params.length, params.batch_size):zero(),
-		last_doc_endings = torch.IntTensor(params.batch_size):zero(),
+
+		first_doc_ends = torch.IntTensor(params.batch_size):zero(),
+		last_doc_ends = torch.IntTensor(params.batch_size):zero(),
 
 		-- A useful constant of which we will make many shallow copies.
 		zero_layer_state = torch.zeros(params.batch_size,
@@ -150,7 +154,7 @@ function LSTM_RNN.create(params)
 		-- during bprop are zero, we set the module's output gradients
 		-- to zero.
 		pred_grads = torch.zeros(params.batch_size,
-			params.vocab_size):cuda()
+			params.vocab_size):cuda(),
 
 		preds = {},
 		states = {},
@@ -175,59 +179,94 @@ function LSTM_RNN.create(params)
 	}
 
 	for i = 1, 2 * model.layers do
-		model.zero_state[i] = model.zero_state
+		model.zero_state[i] = model.zero_layer_state
 	end
 
 	for i = 2, model.length do
 		model.prev_states[i] = {}
 		for j = 1, 2 * model.layers do
-			model.prev_states[i][j] = model.zero_state:clone()
+			model.prev_states[i][j] = model.zero_layer_state:clone()
 		end
 	end
 
 	for i = 1, 2 * model.layers do
-		model.zero_state_grads[i] = model.zero_state
-		model.state_grad_buf[i] = model.zero_state:clone()
+		model.zero_state_grads[i] = model.zero_layer_state
+		model.state_grad_buf[i] = model.zero_layer_state:clone()
 	end
+
+	setmetatable(model, LSTM_RNN)
 	return model
 end
 
 --
--- This function must be called after the network is created or deserialized.
+-- This function must be called before the RNN is used to process a new data
+-- source (e.g. when switching between the training and validation data). It
+-- does not need to be called the first time the RNN is used after being
+-- created.
+--
+function LSTM_RNN:clear_context()
+	self.first_doc_ends:zero()
+	self.last_doc_ends:zero()
+end
+
+--
+-- This function must be called when the start of the window for BPTT is moved
+-- forward in the input sequence. It does not need to be called the first time
+-- the RNN is used to process a new data source.
+--
+function LSTM_RNN:advance_context(n)
+	assert(n > 0, "Cannot advance window by negative offset.")
+
+	for i = 1, self.last_doc_ends:size(1) do
+		assert(self.last_doc_ends[i] > 0, "Window too small to " ..
+			"contain document.")
+		assert(n <= self.last_doc_ends[i], "Window moved past " ..
+			"unseen data.")
+		self.first_doc_ends[i] = self.last_doc_ends[i] - n
+	end
+	self.last_doc_ends:zero()
+end
+
+--
+-- This function must be called after the network is deserialized.
 --
 function LSTM_RNN:restore()
-	self.clones = clone_network(self.module, self.length)
+	self.clones = clone_network(self.network, self.length)
 end
 
 function LSTM_RNN:forward(i, input, output, token_ends_doc)
 	assert(i >= 1 and i <= self.length)
-	assert(input:size(1) == params.batch_size)
-	assert(output:size(1) == params.batch_size)
-	assert(token_ends_doc:size(1) == params.batch_size)
+	assert(input:size(1) == self.batch_size)
+	assert(output:size(1) == self.batch_size)
+	assert(token_ends_doc:size(1) == self.batch_size)
 
+	print("A")
 	-- Update the positions of the ends of the documents in the current
 	-- window.
 	self.token_ends_doc[i]:copy(token_ends_doc)
 	if i == 1 then
-		self.last_doc_endings:zero()
+		self.last_doc_ends:zero()
 	end
 	for j = 1, token_ends_doc:size(1) do
 		if token_ends_doc[j] == 1 then
-			self.last_doc_endings[j] = i
+			self.last_doc_ends[j] = i
 		end
 	end
+	print("B")
 
 	local prev_state
 	if i == 1 then
 		-- The previous state supplied to the first clone is the zero
 		-- state.
 		prev_state = self.zero_state
-	else if self.token_ends_doc[i - 1]:sum() == 0 then
+	elseif self.token_ends_doc[i - 1]:sum() == 0 then
+		print("HA")
 		-- If none of the batch_size tokens at the previous position
 		-- were at the ends of documents, then we can safely use the
 		-- previous state of the RNN without zeroing out any components.
 		prev_state = self.states[i - 1]
 	else
+		print("HB")
 		-- Some of the previous tokens were at the ends of documents, so
 		-- we have to zero out the corresponding components of the
 		-- state.
@@ -244,21 +283,23 @@ function LSTM_RNN:forward(i, input, output, token_ends_doc)
 		end
 	end
 
-	self.states[i], self.preds[i] = unpack(self.clones[i]:forward(
+	print("C")
+	self.preds[i], self.states[i] = unpack(self.clones[i]:forward(
 		{input, prev_state}))
 
+	print("D")
 	if output == nil then return end
 	return self.criterion:forward(self.preds[i], output)
 end
 
 function LSTM_RNN:backward(i, input, output)
 	assert(i >= 1 and i <= self.length)
-	assert(input:size(1) == params.batch_size)
-	assert(output:size(1) == params.batch_size)
+	assert(input:size(1) == self.batch_size)
+	assert(output:size(1) == self.batch_size)
 
 	local output_grads = self.criterion:backward(self.preds[i], output)
-	for j = 1, self.last_doc_endings:size(1) do
-		if i > self.last_doc_endings[j] then
+	for j = 1, self.last_doc_ends:size(1) do
+		if i < self.first_doc_ends[i] or i > self.last_doc_ends[j] then
 			output_grads[j]:zero()
 		end
 	end
@@ -267,7 +308,7 @@ function LSTM_RNN:backward(i, input, output)
 	local prev_state
 	if i == 1 then
 		prev_state = self.zero_state
-	else if self.token_ends_doc[i - 1]:sum() == 0 then
+	elseif self.token_ends_doc[i - 1]:sum() == 0 then
 		prev_state = self.states[i - 1]
 	else
 		prev_state = self.prev_state[i]
@@ -279,7 +320,7 @@ function LSTM_RNN:backward(i, input, output)
 	local next_state_grads
 	if i == self.batch_size then
 		next_state_grads = self.zero_state_grads
-	else if self.token_ends_doc[i]:sum() == 0 then
+	elseif self.token_ends_doc[i]:sum() == 0 then
 		next_state_grads = self.next_state_grads
 	else
 		next_state_grads = self.state_grad_buf
@@ -295,7 +336,7 @@ function LSTM_RNN:backward(i, input, output)
 		end
 	end
 
-	self.state_grads = self.clones[i]:backward({input, prev_state},
+	self.next_state_grads = self.clones[i]:backward({input, prev_state},
 		{output_grads, next_state_grads, self.pred_grads})[2]
 end
 
