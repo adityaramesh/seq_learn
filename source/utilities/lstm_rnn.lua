@@ -142,7 +142,11 @@ function LSTM_RNN.create(params)
 		-- to use a zero input gradient instead of the next one.
 		token_ends_doc = torch.ByteTensor(params.length, params.batch_size):zero(),
 
+		-- Keeps track of the first index along each component that
+		-- corresponds to the end of a document.
 		first_doc_ends = torch.IntTensor(params.batch_size):zero(),
+		-- Keeps track of the last index along each component that
+		-- corresponds to the end of a document.
 		last_doc_ends = torch.IntTensor(params.batch_size):zero(),
 
 		-- A useful constant of which we will make many shallow copies.
@@ -171,7 +175,7 @@ function LSTM_RNN.create(params)
 		-- backward pass.
 		zero_state_grads = {},
 		-- Used when the current token along any of the `batch_size`
-		-- componenst of the input is the end of a document. Then the
+		-- components of the input is the end of a document. Then the
 		-- state gradients will be a mixture of zeros and state
 		-- gradients from the next clone.
 		state_grad_buf = {},
@@ -182,6 +186,9 @@ function LSTM_RNN.create(params)
 		model.zero_state[i] = model.zero_layer_state
 	end
 
+	-- The `prev_states` variable is of size `length` x 2 * `layers`, and
+	-- each component of `prev_state` is a matrix of size `batch_size` x
+	-- `lstm_cell_width`.
 	for i = 2, model.length do
 		model.prev_states[i] = {}
 		for j = 1, 2 * model.layers do
@@ -234,6 +241,13 @@ function LSTM_RNN:restore()
 	self.clones = clone_network(self.network, self.length)
 end
 
+--
+-- Runs forward propagation for the `i`th clone of RNN, using the given `input`
+-- and `output` vectors. Note that `input` and `output` must both have size
+-- equal to `batch_size`. `token_ends_doc` is a vector of size `batch_size`
+-- whose `j`th component indicates whether the current token seen by the `j`th
+-- component of the network is the end of a document.
+--
 function LSTM_RNN:forward(i, input, output, token_ends_doc)
 	assert(i >= 1 and i <= self.length)
 	assert(input:size(1) == self.batch_size)
@@ -274,6 +288,15 @@ function LSTM_RNN:forward(i, input, output, token_ends_doc)
 		for j = 1, 2 * model:layers() do
 			prev_state[j]:copy(self.states[i - 1][j])
 		end
+
+		-- If the token seen by component `j` of the network during the
+		-- previous forward pass was the end of its document, then we
+		-- need to clear the components of the context that corresopnd
+		-- to component `j`. Note that `prev_state[k][j] ==
+		-- self.prev_state[i][k][j]`. Each value of `j` selects a row of
+		-- size `lstm_cell_width`. So varying `k` while keeping the
+		-- other indices constant clears the `j`th row of the memory for
+		-- each layer.
 		for j = 1, self.token_ends_doc:size(2) do
 			if self.token_ends_doc[i - 1][j] == 1 then
 				for k = 1, 2 * model:layers() do

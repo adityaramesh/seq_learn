@@ -55,6 +55,9 @@ local function merge_documents(category, data)
 	return docs, lengths
 end
 
+--
+-- TODO
+--
 function load_hdf5(fn)
 	local data = hdf5.open(fn):read():all()
 	local train_docs, train_lengths = merge_documents("train", data)
@@ -65,6 +68,9 @@ function load_hdf5(fn)
 	local cur_word = {}
 
 	for i = 1, data.vocab:size(1) do
+		-- Zero is used as the delimiter between tokens in the `vocab`
+		-- dataset. If we see a zero, then we concatenate the characters
+		-- in our current list to form the next word in our vocabulary.
 		if data.vocab[i] == 0 then
 			vocab[cur_index] = table.concat(cur_word, "")
 			cur_word = {}
@@ -142,17 +148,29 @@ function batch_documents(batch_size, data)
 
 	-- Used to keep track of the offsets into the `batch_data` array.
 	local batch_off = torch.IntTensor(batch_size):fill(1)
+	-- In the process of partitioning the documents into batches, we also
+	-- keep track of the offsets to the ends (i.e. the last character) of
+	-- each document within each batch. We'll refer to these offsets as the
+	-- "boundaries" of the documents. When computing the boundary of a
+	-- document assigned to a particular batch, we require the previous
+	-- boundary. This array keeps track of the previous boundaries for all
+	-- the batches.
 	local batch_prev_bds = torch.IntTensor(batch_size):fill(0)
+	-- Used to store the documents once they have been partitioned into
+	-- separate batches.
 	local batch_data = torch.IntTensor(batch_size, max_len)
+	-- See the comment for `batch_prev_bds`.
 	local batch_boundaries = torch.IntTensor(batch_size,
 		1 + math.floor((doc_count - 1) / batch_size))
 
 	-- Copies data from the original arrays to the arrays that are designed
 	-- for batch mode processing by the network.
 	local function process_document(batch_index, doc_index)
-		local off = batch_off[batch_index]
+		local off       = batch_off[batch_index]
 		local src_index = perm[doc_index]
-		local src_len = data.lengths[src_index]
+		local src_len   = data.lengths[src_index]
+		-- This is the index of the document within the batch
+		-- corresponding to `batch_index`.
 		local dst_index = 1 + math.floor((doc_index - 1) / batch_size)
 
 		batch_data[{batch_index, {off, off + src_len - 1}}] =
@@ -167,6 +185,7 @@ function batch_documents(batch_size, data)
 		batch_off[batch_index] = batch_off[batch_index] + src_len
 	end
 
+	-- Partition the documents into the `batch_size` batches.
 	for i = 1, doc_count, batch_size do
 		local batches = i + batch_size - 1 > doc_count and
 			doc_count % batch_size or batch_size

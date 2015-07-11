@@ -22,6 +22,8 @@ for index, line in pairs(lines) do
 	lines_set[line] = 0
 end
 
+-- Check that every line in the original data set is found in the condensed data
+-- set.
 fh = io.open(orig_data_fn)
 while true do
 	line = fh:read()
@@ -36,7 +38,6 @@ end
 -- Compare the batch-processed data to the original.
 print("Checking consistency of batch-processed data.")
 batch_size = 20
-max_bptt_len = 200
 batch_data = batch_documents(batch_size, data["train"])
 
 lines = {}
